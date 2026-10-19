@@ -1,9 +1,11 @@
 """데이터 모델.
 
 설계 문서(https://files.instinct.com/sqwagzl5jups)의 FilmLocation을 바탕으로,
-모듈 1(웹 검색 + Google Places)에 필요한 필드를 추가했다.
+모듈 1(웹 검색 + Google Places)과 모듈 2(TMDB 영화 식별)에 필요한 필드를 추가했다.
 설계와 달라진 점:
-- Movie 대신 MovieCandidate: TMDB 키가 없어 영화 확정은 검색 결과 기반으로만 한다.
+- Movie: 모듈 2에서 TMDB로 확정한 영화. english_title + year를 모듈 1에 넘긴다.
+- MovieCandidate: 모듈 1의 웹검색 추정 후보와 모듈 2의 TMDB 후보가 같이 쓰는 타입.
+  TMDB 전용 필드(tmdb_id 등)는 모두 선택값이라 모듈 1 코드는 그대로 동작한다.
 - FilmLocation에 source_urls, confidence, google_maps_uri를 추가했다.
   (출처 URL과 신뢰도는 웹 검색 기반이라 필수 정보)
 """
@@ -18,6 +20,29 @@ class MovieCandidate:
     title: str
     year: int | None = None
     source_url: str | None = None
+    # --- 모듈 2(TMDB) 전용 (모두 선택) ---
+    tmdb_id: int | None = None
+    original_title: str | None = None
+    overview: str = ""
+    poster_url: str | None = None
+
+
+@dataclass
+class Movie:
+    """모듈 2에서 사용자가 확정한 영화.
+
+    english_title과 year를 모듈 1 find_film_locations()에 그대로 넣어
+    촬영지 검색 정확도를 높인다.
+    """
+    tmdb_id: int
+    title: str                     # 표시용 제목 (ko-KR 우선)
+    english_title: str             # 모듈 1 검색에 쓸 영어 제목
+    year: int | None = None
+    director: str | None = None
+    overview: str = ""
+    poster_url: str | None = None
+    original_title: str | None = None
+    tmdb_url: str | None = None
 
 
 @dataclass
