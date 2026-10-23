@@ -15,6 +15,13 @@
   역사 명소를 Google Places Nearby Search(New)로 찾는다. 맛집은 현지 요리 타입
   (예: KR이면 korean_restaurant)을 우선 보여주는 휴리스틱을 쓴다.
 
+- **모듈 4 (여행 계획, 2026-10-23)**: 찾은 촬영지를 골라 여행 날짜·인원·동행인·
+  예산(1인/전체 기준, 항공료 포함 여부)을 넣으면 하루 단위 일정 초안을 만든다.
+  가까운 촬영지끼리 같은 날로 묶고(직선거리 80km, 하루 최대 3곳), 남는 날은
+  '자유 일정'으로 둔다. 직선거리 기준 초안이라 실제 이동 시간·국경/페리·
+  영업시간은 확인하지 않으며, 일수에 맞춰 먼 곳끼리 합친 날은 경고를 표시한다. 예상 지출(항공료·숙소·식비 등)을 채우면 남은 예산을
+  바로 계산해준다. 외부 API는 부르지 않아서 비용이 들지 않는다.
+
 TMDB 키가 없어도 모듈 1 방식(제목 그대로 검색)으로 동작한다.
 
 ## 설치
@@ -38,7 +45,8 @@ streamlit run app.py
 ## 구조
 
 ```
-app.py                    Streamlit UI (영화 선택 → 촬영지 → 주변 추천)
+app.py                    Streamlit UI (영화 선택 → 촬영지 → 주변 추천 → 여행 계획)
+src/trip.py               모듈 4: 여행 조건(인원/날짜/예산) + 일정 초안
 src/movie_search.py       모듈 2: TMDB 검색/확정 파이프라인
 src/pipeline.py           모듈 1: 촬영지 검색 파이프라인 (+한국 장소 필터)
 src/nearby.py             모듈 3: 주변 맛집/트래킹/역사 명소
@@ -49,7 +57,7 @@ src/sources/tmdb_client.py    TMDB v3/v4 인증, 검색, 상세+credits
 src/sources/tavily_client.py  Tavily Search/Extract
 src/sources/brave_client.py   Brave Web Search
 src/sources/gplaces.py        Google Places Text Search/Nearby Search (New)
-tests/                    79개 테스트 (실제 API 호출 없이 가짜 응답 사용)
+tests/                    97개 테스트 (실제 API 호출 없이 가짜 응답 사용)
 ```
 
 ## TMDB 관련 참고
@@ -72,5 +80,5 @@ tests/                    79개 테스트 (실제 API 호출 없이 가짜 응�
 ## 테스트
 
 ```bash
-python3 -m pytest tests -q   # 79개 통과, 네트워크 호출 없음
+python3 -m pytest tests -q   # 97개 통과, 네트워크 호출 없음
 ```
