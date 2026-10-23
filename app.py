@@ -17,6 +17,7 @@ from src.config import load_settings
 from src.errors import AuthError, RateLimitError, SourceError
 from src.models import Movie
 from src.movie_search import confirm_movie, search_movies
+from src.nearby import CATEGORY_LABELS, find_nearby
 from src.pipeline import find_film_locations
 from src.sources.brave_client import BraveSearchClient
 from src.sources.gplaces import GooglePlacesClient
@@ -117,9 +118,67 @@ def show_locations(result) -> None:
             with st.expander("확인하지 못한 촬영지 언급 (Google Places에서 못 찾음)"):
                 for m in result.unresolved_mentions:
                     st.markdown(f"- {m.raw_text} — [출처]({m.source_url})")
+        nearby_section(result)
 
 
-def run_location_search(title: str, year: int | None) -> None:
+def _fmt_km(distance_m: float) -> str:
+    return f"{distance_m/1000:.1f}km" if distance_m >= 1000 else f"{int(distance_m)}m"
+
+
+def show_nearby(groups) -> None:
+    """모듈 3 결과 렌더링: 촬영지별 맛집/트래킹/역사 명소."""
+    for g in groups:
+        with st.expander(f"📍 {g.location.name} 주변", expanded=True):
+            for w in g.warnings:
+                st.warning(w)
+            cols = st.columns(3)
+            for col, key in zip(cols, ("restaurants", "trekking", "historic")):
+                with col:
+                    st.markdown(f"**{CATEGORY_LABELS[key]}**")
+                    items = getattr(g, key)
+                    if not items:
+                        st.caption("찾은 곳이 없어요.")
+                    for n in items:
+                        line = f"{n.place.name} ({_fmt_km(n.distance_m)})"
+                        if n.place.google_maps_uri:
+                            st.markdown(f"- [{line}]({n.place.google_maps_uri})")
+                        else:
+                            st.markdown(f"- {line}")
+                        st.caption(n.place.address)
+
+
+def nearby_section(result) -> None:
+    """모듈 3: 촬영지 주변 맛집/트래킹/역사 명소 찾기.
+
+    촬영지마다 카테고리 3번씩 Nearby Search를 부르므로(API 비용) 버튼을 눌렀을 때만
+    실행한다. 반경 기본 10km(렌터카 기준), 맛집은 현지 식사 우선.
+    """
+    if not result.locations or clients["places"] is None:
+        return
+    st.divider()
+    st.subheader("🍜 주변 맛집 / 🥾 트래킹 / 🏛️ 역사 명소")
+    radius_km = st.slider("검색 반경 (km)", min_value=1, max_value=30, value=10,
+                          help="렌터카 이동 기준 기본 10km예요.")
+    if st.button("주변 찾기", type="primary"):
+        try:
+            with st.spinner(f"촬영지 {len(result.locations)}곳 주변을 찾는 중… "
+                            "(촬영지 1곳당 검색 3번)"):
+                st.session_state["nearby_groups"] = find_nearby(
+                    result.locations, clients["places"],
+                    radius_m=radius_km * 1000, per_category=3)
+        except AuthError as exc:
+            st.error(f"API 키 문제예요: {exc}")
+        except RateLimitError as exc:
+            st.error(f"호출 한도를 초과했어요: {exc} — 잠시 후 다시 시도해 주세요.")
+        except SourceError as exc:
+            st.error(f"외부 서비스 오류: {exc}")
+    groups = st.session_state.get("nearby_groups") or []
+    if groups:
+        show_nearby(groups)
+
+
+def run_location_search(title: str, year: int | None,
+                        allow_korea: bool = True) -> None:
     """모듈 1 호출 + 오류 처리 + 렌더링."""
     try:
         with st.spinner("촬영지를 찾는 중… (최대 30초)"):
@@ -127,6 +186,7 @@ def run_location_search(title: str, year: int | None) -> None:
                 title, year=year,
                 brave=clients["brave"], tavily=clients["tavily"],
                 places=clients["places"],
+                allow_korea=allow_korea,
             )
         st.session_state["last_result"] = result
     except AuthError as exc:
@@ -214,8 +274,17 @@ if use_tmdb:
                            + "을 써요.")
                 if movie.tmdb_url:
                     st.markdown(f"[TMDB에서 보기]({movie.tmdb_url})")
+        # 제작 국가에 한국(KR)이 없는 외국 영화면 한국 장소 후보를 제외한다.
+        # 제작 국가 정보가 아예 없으면(알 수 없음) 필터를 켜지 않는다.
+        allow_korea = (not movie.production_countries
+                       or "KR" in movie.production_countries)
+        if movie.production_countries:
+            st.caption("제작 국가(TMDB): " + ", ".join(movie.production_countries)
+                       + ("" if allow_korea
+                          else " — 한국이 아니라서 한국 장소는 결과에서 뺄게요."))
         if st.button("이 영화로 촬영지 찾기", type="primary"):
-            run_location_search(movie.english_title, movie.year)
+            run_location_search(movie.english_title, movie.year,
+                                allow_korea=allow_korea)
 
     # --- TMDB 어트리뷰션 (약관 필수) ---------------------------------------
     st.divider()

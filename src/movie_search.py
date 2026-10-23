@@ -89,6 +89,8 @@ def confirm_movie(candidate: MovieCandidate, tmdb,
     overview = details.get("overview") or candidate.overview
     poster = poster_url(details.get("poster_path")) or candidate.poster_url
     year = _year_of(details) or candidate.year
+    countries = [c.get("iso_3166_1") for c in details.get("production_countries") or []
+                 if c.get("iso_3166_1")]
 
     return Movie(
         tmdb_id=candidate.tmdb_id,
@@ -100,4 +102,5 @@ def confirm_movie(candidate: MovieCandidate, tmdb,
         poster_url=poster,
         original_title=original_title,
         tmdb_url=f"https://www.themoviedb.org/movie/{candidate.tmdb_id}",
+        production_countries=countries,
     )

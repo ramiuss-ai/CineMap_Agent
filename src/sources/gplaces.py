@@ -20,9 +20,13 @@ from ..errors import AuthError, RateLimitError, UpstreamError
 from ..models import ResolvedPlace
 
 TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+NEARBY_SEARCH_URL = "https://places.googleapis.com/v1/places:searchNearby"
+# addressComponents는 formattedAddress 등과 같은 Text Search Pro SKU라
+# 추가해도 과금 등급이 안 오른다 (2026-10-20 문서 확인).
 FIELD_MASK = (
     "places.id,places.displayName,places.formattedAddress,"
-    "places.location,places.types,places.googleMapsUri"
+    "places.location,places.types,places.googleMapsUri,"
+    "places.addressComponents"
 )
 
 
@@ -48,7 +52,37 @@ class GooglePlacesClient:
         }
         if region_code:
             payload["regionCode"] = region_code
+        resp = self._post(TEXT_SEARCH_URL, payload)
+        return self._parse(resp)
 
+    def nearby_search(self, lat: float, lon: float, radius_m: float,
+                      included_types: list[str], max_results: int = 10,
+                      language_code: str = "ko",
+                      rank_preference: str = "POPULARITY") -> list[ResolvedPlace]:
+        """Nearby Search (New). 모듈 3(주변 맛집/트래킹/역사 명소)에서 쓴다.
+
+        공식 문서 확인일: 2026-10-20
+        (developers.google.com/maps/documentation/places/web-service/nearby-search)
+        - radius는 0~50000m, maxResultCount는 1~20.
+        - rankPreference: POPULARITY(기본) 또는 DISTANCE.
+        - 쓰는 필드는 전부 Nearby Search Pro SKU (text_search와 같은 등급).
+        """
+        payload: dict = {
+            "includedTypes": included_types,
+            "maxResultCount": max(1, min(max_results, 20)),
+            "languageCode": language_code,
+            "rankPreference": rank_preference,
+            "locationRestriction": {
+                "circle": {
+                    "center": {"latitude": lat, "longitude": lon},
+                    "radius": float(radius_m),
+                }
+            },
+        }
+        resp = self._post(NEARBY_SEARCH_URL, payload)
+        return self._parse(resp)
+
+    def _post(self, url: str, payload: dict) -> requests.Response:
         headers = {
             "Content-Type": "application/json",
             "X-Goog-Api-Key": self._api_key,
@@ -57,13 +91,13 @@ class GooglePlacesClient:
         last_error: Exception | None = None
         for attempt in range(self._max_retries + 1):
             try:
-                resp = self._session.post(TEXT_SEARCH_URL, json=payload,
+                resp = self._session.post(url, json=payload,
                                           headers=headers, timeout=self._timeout)
             except requests.RequestException as exc:
                 raise UpstreamError(f"Google Places 연결 실패: {exc}") from exc
 
             if resp.status_code == 200:
-                return self._parse(resp)
+                return resp
             if resp.status_code in (400, 401, 403):
                 raise AuthError(
                     f"Google Places 인증/설정 오류 (HTTP {resp.status_code}): {resp.text[:200]}"
@@ -100,5 +134,16 @@ class GooglePlacesClient:
                 lon=float(lng),
                 types=item.get("types", []) or [],
                 google_maps_uri=item.get("googleMapsUri"),
+                country_code=_country_code(item),
             ))
         return places
+
+
+def _country_code(item: dict) -> str | None:
+    """addressComponents에서 국가 코드(ISO 3166-1, 예: "KR")를 뽑는다."""
+    for comp in item.get("addressComponents") or []:
+        if "country" in (comp.get("types") or []):
+            code = comp.get("shortText")
+            if code:
+                return str(code).upper()
+    return None

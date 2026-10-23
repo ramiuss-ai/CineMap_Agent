@@ -8,6 +8,13 @@
   Tavily + Brave 웹 검색으로 촬영지 언급을 모으고, Google Places( Text Search New )로
   이름/주소/좌표를 확인한다.
 
+- **한국 장소 제외 (패치, 2026-10-20)**: 확정한 영화의 TMDB 제작 국가에 한국(KR)이
+  없으면, 촬영지 후보에서 한국에 있는 장소를 뺀다. 외국 영화 검색에 한국 업소가
+  억지로 끼어드는 걸 막기 위해서다. 제작 국가 정보가 없거나 한국 영화면 그대로 둔다.
+- **모듈 3 (주변 추천)**: 촬영지마다 반경(기본 10km, 렌터카 기준) 안의 맛집·트래킹·
+  역사 명소를 Google Places Nearby Search(New)로 찾는다. 맛집은 현지 요리 타입
+  (예: KR이면 korean_restaurant)을 우선 보여주는 휴리스틱을 쓴다.
+
 TMDB 키가 없어도 모듈 1 방식(제목 그대로 검색)으로 동작한다.
 
 ## 설치
@@ -31,17 +38,18 @@ streamlit run app.py
 ## 구조
 
 ```
-app.py                    Streamlit UI (영화 선택 → 촬영지)
+app.py                    Streamlit UI (영화 선택 → 촬영지 → 주변 추천)
 src/movie_search.py       모듈 2: TMDB 검색/확정 파이프라인
-src/pipeline.py           모듈 1: 촬영지 검색 파이프라인
-src/models.py             Movie, MovieCandidate, FilmLocation 등
+src/pipeline.py           모듈 1: 촬영지 검색 파이프라인 (+한국 장소 필터)
+src/nearby.py             모듈 3: 주변 맛집/트래킹/역사 명소
+src/models.py             Movie, FilmLocation, NearbyPlace/NearbyGroup 등
 src/config.py             키 읽기 (환경변수 → st.secrets)
 src/errors.py             AuthError / RateLimitError / UpstreamError
 src/sources/tmdb_client.py    TMDB v3/v4 인증, 검색, 상세+credits
 src/sources/tavily_client.py  Tavily Search/Extract
 src/sources/brave_client.py   Brave Web Search
-src/sources/gplaces.py        Google Places Text Search (New)
-tests/                    59개 테스트 (실제 API 호출 없이 가짜 응답 사용)
+src/sources/gplaces.py        Google Places Text Search/Nearby Search (New)
+tests/                    79개 테스트 (실제 API 호출 없이 가짜 응답 사용)
 ```
 
 ## TMDB 관련 참고
@@ -52,8 +60,17 @@ tests/                    59개 테스트 (실제 API 호출 없이 가짜 응�
 - 캐시: TMDB 약관상 캐시는 최대 6개월. 앱은 1시간만 캐시한다 (st.cache_data ttl=3600).
 - 어트리뷰션: 약관에 따라 앱 하단에 TMDB 로고와 고지 문구를 표시한다.
 
+## Google Places 비용 메모 (2026-10-20 문서 기준)
+
+- Text Search, Nearby Search 모두 요청 필드를 **Pro SKU** 범위로 고정했다
+  (displayName, formattedAddress, location, types, googleMapsUri, addressComponents).
+  rating/전화번호/영업시간 등은 Enterprise SKU라 일부러 제외했다.
+- 검색 1회당 Places 호출: 모듈 1 최대 12회(Text Search) + 모듈 3은
+  촬영지 1곳당 3회(Nearby Search, 카테고리별 1회). 모듈 3은 버튼을 눌렀을 때만 돈다.
+- 무료 한도: SKU별 월 무료 호출이 있다. 정확한 최신 한도는 Google Cloud 콘솔 확인.
+
 ## 테스트
 
 ```bash
-python3 -m pytest tests -q   # 59개 통과, 네트워크 호출 없음
+python3 -m pytest tests -q   # 79개 통과, 네트워크 호출 없음
 ```

@@ -21,6 +21,31 @@ from .extract_names import extract_mentions, mentions_from_results
 from .models import (FilmLocation, LocationMention, LocationSearchResult,
                      MovieCandidate, WebResult)
 
+# 대한민국 대략 경계상자 (addressComponents에 국가 코드가 없을 때만 쓰는 폴백)
+_KR_LAT_MIN, _KR_LAT_MAX = 33.0, 38.8
+_KR_LON_MIN, _KR_LON_MAX = 124.0, 132.1
+
+
+def is_korea_place(place) -> bool:
+    """이 장소가 한국에 있는지 추정한다.
+
+    1순위: Google Places addressComponents의 국가 코드 ("KR").
+    2순위(코드가 없을 때): 주소의 "대한민국"/"South Korea" 문자열,
+    마지막으로 좌표 경계상자. 경계상자는 휴전선 부근에서 다소 넓게 잡히지만,
+    국가 코드가 빠진 드문 경우의 폴백이라 그 정도 오차는 감수한다.
+    """
+    code = getattr(place, "country_code", None)
+    if code:
+        return code.upper() == "KR"
+    addr = (getattr(place, "address", "") or "").lower()
+    if "대한민국" in addr or "south korea" in addr:
+        return True
+    lat, lon = getattr(place, "lat", None), getattr(place, "lon", None)
+    if lat is None or lon is None:
+        return False
+    return _KR_LAT_MIN <= lat <= _KR_LAT_MAX and _KR_LON_MIN <= lon <= _KR_LON_MAX
+
+
 _YEAR_RE = re.compile(r"\((\d{4})\)")
 _FILM_WORD_RE = re.compile(r"(영화|film|movie)", re.IGNORECASE)
 # 검색 결과 제목에서 영화 제목으로 보이는 패턴: "제목 (2016)" / "제목 (2016년 영화)"
@@ -56,8 +81,15 @@ def find_movie_candidates(query: str, brave, tavily,
 def find_film_locations(title: str, year: int | None = None,
                         brave=None, tavily=None, places=None,
                         max_resolve: int = 12,
-                        max_extract_urls: int = 5) -> LocationSearchResult:
-    """메인 진입점. title은 한글/영어 모두 가능, year가 있으면 모호성 해소."""
+                        max_extract_urls: int = 5,
+                        allow_korea: bool = True) -> LocationSearchResult:
+    """메인 진입점. title은 한글/영어 모두 가능, year가 있으면 모호성 해소.
+
+    allow_korea=False이면 한국에 있는 장소를 후보에서 뺀다. 모듈 2에서 확정한
+    영화의 제작 국가(production_countries)에 한국(KR)이 없을 때 쓴다 —
+    외국 영화 검색에서 한국 업소가 억지로 끼어드는 걸 막기 위해서다.
+    TMDB 확인 없이 모듈 1만 쓸 때는 기본값(True)이라 아무것도 빼지 않는다.
+    """
     warnings: list[str] = []
 
     # 1) 모호성 확인: year가 없으면 후보가 2개 이상인지 먼저 본다
@@ -116,6 +148,7 @@ def find_film_locations(title: str, year: int | None = None,
     # 5) Google Places로 확인
     locations: list[FilmLocation] = []
     unresolved: list[LocationMention] = []
+    excluded_korea: list[str] = []
     if places is None:
         warnings.append("Google Places 키가 없어 장소 확인(좌표/주소)을 건너뛰었어요.")
         unresolved = [g["mention"] for g in grouped.values()]
@@ -139,6 +172,9 @@ def find_film_locations(title: str, year: int | None = None,
             if place.place_id in seen_place_ids:
                 continue
             seen_place_ids.add(place.place_id)
+            if not allow_korea and is_korea_place(place):
+                excluded_korea.append(place.name)
+                continue
             locations.append(FilmLocation(
                 name=place.name,
                 address=place.address,
@@ -150,6 +186,13 @@ def find_film_locations(title: str, year: int | None = None,
                 confidence=_confidence(len(g["urls"]), resolved=True),
                 google_maps_uri=place.google_maps_uri,
             ))
+
+    if excluded_korea:
+        names = ", ".join(excluded_korea)
+        warnings.append(
+            f"한국에 있는 장소 {len(excluded_korea)}곳({names})은 제외했어요 — "
+            "확정된 영화의 제작 국가에 한국이 없거든요. "
+            "한국 영화라면 영화 선택을 다시 확인해 주세요.")
 
     if not locations and not unresolved:
         return LocationSearchResult(query=title, status="no_results",

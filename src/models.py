@@ -43,6 +43,9 @@ class Movie:
     poster_url: str | None = None
     original_title: str | None = None
     tmdb_url: str | None = None
+    # TMDB 상세의 production_countries (ISO 3166-1 코드 목록, 예: ["KR"], ["GB","US"])
+    # 한국 장소 필터링에 쓴다: 여기에 "KR"이 없으면 한국 장소 후보를 제외한다.
+    production_countries: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -72,6 +75,7 @@ class ResolvedPlace:
     lon: float
     types: list[str] = field(default_factory=list)
     google_maps_uri: str | None = None
+    country_code: str | None = None   # ISO 3166-1 (예: "KR"). addressComponents에서 추출
 
 
 @dataclass
@@ -87,6 +91,24 @@ class FilmLocation:
     source_urls: list[str] = field(default_factory=list)  # 근거 페이지들
     confidence: float = 0.0         # 0.0~1.0
     google_maps_uri: str | None = None
+
+
+@dataclass
+class NearbyPlace:
+    """모듈 3: 촬영지 주변에서 찾은 장소 한 곳."""
+    category: str            # "restaurants" | "trekking" | "historic"
+    distance_m: float        # 촬영지로부터 직선거리 (미터)
+    place: ResolvedPlace
+
+
+@dataclass
+class NearbyGroup:
+    """모듈 3: 한 촬영지의 주변 추천 묶음."""
+    location: FilmLocation
+    restaurants: list[NearbyPlace] = field(default_factory=list)
+    trekking: list[NearbyPlace] = field(default_factory=list)
+    historic: list[NearbyPlace] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)   # 부분 실패 안내
 
 
 @dataclass
