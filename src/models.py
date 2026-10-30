@@ -128,3 +128,32 @@ class LocationSearchResult:
     unresolved_mentions: list[LocationMention] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)   # 부분 실패 안내 (예: Tavily 다운)
     error: str | None = None
+
+
+# --- 1단계 개편 (장소 중심, 2026-10-28) ---------------------------------------
+
+
+@dataclass
+class Candidate:
+    """여행지에서 모은 방문 후보 한 곳.
+
+    category는 src.candidates.CATEGORIES 키, 영화 촬영지는 "film".
+    영화 촬영지는 웹에서 촬영지로 소개된 곳이라 source_urls(근거)가 필수고,
+    영화와의 연결은 근거 링크로 사용자가 확인한다 (앱이 지어내지 않는다).
+    """
+    category: str
+    place: ResolvedPlace
+    distance_m: float                     # 여행지 중심으로부터 직선거리
+    film: bool = False
+    source_urls: list[str] = field(default_factory=list)
+    confidence: float | None = None       # film: 독립 출처 수 기반 신뢰도
+
+
+@dataclass
+class CandidateSet:
+    """한 여행지의 후보 수집 결과. api 호출 수는 비용 가시화용."""
+    destination: ResolvedPlace
+    candidates: list[Candidate] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    places_calls: int = 0                 # Google Places 호출 수
+    web_calls: int = 0                    # Brave/Tavily 호출 수

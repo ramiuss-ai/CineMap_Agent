@@ -10,6 +10,12 @@
 - 일정 초안은 촬영지 좌표를 가까운 곳끼리 묶어(직선거리) 하루에 배정한다.
   촬영지 묶음이 여행 일수보다 많으면 가장 가까운 묶음끼리 합치고,
   적으면 남는 날은 '자유 일정'으로 둔다.
+- 남는 날 처리 (2026-10-23, WhatsApp 요청): 라라랜드처럼 촬영지가 적어
+  여행이 이틀 만에 끝나는 경우, 남는 날에 모듈 3에서 이미 찾아 둔
+  주변 명소(트래킹·역사)를 중복 없이 채운다. 새 API 호출은 없다.
+- 이동 수단 (2026-10-30, WhatsApp 요청): 렌트카·가이드 투어·대중교통 중
+  고른다. 실제 이동 시간 계산은 2단계라, 지금은 일정표의 이동 안내 문구와
+  예산 지출 항목 이름에만 반영한다 (지어낸 시간을 넣지 않는다).
 """
 from __future__ import annotations
 
@@ -17,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .nearby import haversine_m
-from .models import FilmLocation
+from .models import FilmLocation, NearbyGroup, NearbyPlace
 
 BUDGET_BASIS_LABELS = {"per_person": "1인 기준", "total": "전체 기준"}
 
@@ -30,6 +36,23 @@ EXPENSE_CATEGORIES: list[tuple[str, str]] = [
     ("car", "렌터카"),
     ("etc", "기타"),
 ]
+
+# 이동 수단 (2026-10-30 추가). 이 사용자의 여행 이동은 대부분 렌트카나
+# 가이드 투어라 둘을 기본 선택지로 두고 대중교통도 고를 수 있게 했다.
+TRANSPORT_MODES: dict[str, str] = {
+    "rental_car": "렌트카",
+    "guided_tour": "가이드 투어",
+    "transit": "대중교통",
+}
+DEFAULT_TRANSPORT = "rental_car"
+
+
+def transport_expense_label(mode: str) -> str:
+    """예산 지출 항목 가운데 'car' 칸의 이름을 이동 수단에 맞춰 바꾼다."""
+    return {"rental_car": "렌터카",
+            "guided_tour": "투어 비용",
+            "transit": "교통비"}.get(mode, "렌터카")
+
 
 # 같은 하루로 묶을 직선거리 기준과 하루 최대 방문 수 (렌터카 이동 전제, 모듈 3과 같은 가정)
 SAME_DAY_GAP_KM = 80.0
@@ -46,6 +69,7 @@ class TripSettings:
     budget_basis: str = "total"     # "per_person" | "total"
     includes_airfare: bool = True   # 항공료를 예산 안에 포함하는지
     companions: tuple[str, ...] = ()  # 동행인 이름 (선택 입력)
+    transport_mode: str = DEFAULT_TRANSPORT  # TRANSPORT_MODES 키
 
     @property
     def days(self) -> int:
@@ -88,6 +112,8 @@ def validate_settings(s: TripSettings) -> list[str]:
         problems.append("예산은 0 이상이어야 해요.")
     if s.budget_basis not in BUDGET_BASIS_LABELS:
         problems.append("예산 기준이 올바르지 않아요.")
+    if s.transport_mode not in TRANSPORT_MODES:
+        problems.append("이동 수단이 올바르지 않아요.")
     return problems
 
 
@@ -151,6 +177,78 @@ def build_itinerary(locations: list[FilmLocation], days: int) -> list[DayPlan]:
         else:
             plans.append(DayPlan(day=i + 1, stops=[], note="자유 일정"))
     return plans
+
+
+# 남는 날에 채울 주변 명소 카테고리. 맛집은 식사라 하루 일정 항목이 아니라
+# 촬영지 아래에 붙이는 기존 방식을 유지하고, 명소(트래킹·역사)만 채운다.
+ATTRACTION_CATEGORIES = ("trekking", "historic")
+
+
+def collect_attractions(days: list[DayPlan],
+                        groups: list[NearbyGroup],
+                        per_day: int = MAX_STOPS_PER_DAY
+                        ) -> dict[int, list[tuple[str, NearbyPlace]]]:
+    """촬영지가 배정되지 않은 날에 넣을 주변 명소를 고른다.
+
+    모듈 3 주변 찾기 결과(groups)에서 명소(트래킹·역사)를 모아,
+    촬영지와 이름이 겹치지 않게 중복을 빼고, 명소를 찾은 촬영지가
+    배정된 날짜가 이른 순으로 가장 이른 빈 날부터 하루 per_day곳씩 채운다.
+    반환: {DayPlan.day: [(명소를 찾은 촬영지 이름, NearbyPlace), ...]}
+    명소가 부족하면 남은 빈 날은 빈 목록이 남는다.
+    """
+    free = [p.day for p in days if not p.stops]
+    out: dict[int, list[tuple[str, NearbyPlace]]] = {d: [] for d in free}
+    if not free or not groups:
+        return out
+    taken = {loc.name.strip().lower() for p in days for loc in p.stops}
+    day_of = {loc.name: p.day for p in days for loc in p.stops}
+    ordered = sorted(groups,
+                     key=lambda g: day_of.get(g.location.name, len(days) + 1))
+    pos = 0
+    for g in ordered:
+        for cat in ATTRACTION_CATEGORIES:
+            for item in getattr(g, cat):
+                key = item.place.name.strip().lower()
+                if key in taken:
+                    continue
+                while pos < len(free) and len(out[free[pos]]) >= per_day:
+                    pos += 1
+                if pos >= len(free):
+                    return out
+                out[free[pos]].append((g.location.name, item))
+                taken.add(key)
+    return out
+
+
+def plan_inputs_match(settings: TripSettings, saved_picks,
+                      current: dict, saved_lodging: str | None = None) -> bool:
+    """저장된 초안의 입력값과 지금 화면 입력값이 같은지 비교한다.
+
+    current 키: dates(튜플/리스트), party, budget, basis, airfare,
+    companions(문자열), picks(리스트), transport(TRANSPORT_MODES 키),
+    lodging(숙소 이름 또는 None). 다르면 초안은 이전 입력 기준이다.
+    transport/lodging 키가 없으면(옛 테스트) 그 항목은 비교하지 않는다.
+    """
+    d = current.get("dates")
+    if not isinstance(d, (tuple, list)) or len(d) != 2:
+        return False
+    if d[0] != settings.start_date or d[1] != settings.end_date:
+        return False
+    companions = tuple(n.strip() for n in str(current.get("companions") or "").split(",")
+                       if n.strip())
+    same = (int(current.get("party") or 0) == settings.party_size
+            and int(current.get("budget") or 0) == settings.budget_amount
+            and current.get("basis") == settings.budget_basis
+            and bool(current.get("airfare")) == settings.includes_airfare
+            and companions == settings.companions
+            and tuple(current.get("picks") or ()) == tuple(saved_picks or ()))
+    if not same:
+        return False
+    if "transport" in current and current["transport"] != settings.transport_mode:
+        return False
+    if "lodging" in current and (current["lodging"] or None) != (saved_lodging or None):
+        return False
+    return True
 
 
 def budget_summary(settings: TripSettings,
